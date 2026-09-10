@@ -6,7 +6,6 @@ passati successivamente al classificatore LLM.
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
@@ -57,7 +56,7 @@ def add_user_answer(answer: str) -> None:
     st.session_state.answers.append(answer)
 
 
-def consult_groq(*, is_follow_up: bool = False) -> None:
+def consult_groq() -> None:
     """Aggiunge alla chat la domanda o l'analisi restituite dal servizio Groq."""
     local_emergency = emergency_analysis(st.session_state.answers[-1])
     if local_emergency:
@@ -98,29 +97,12 @@ def consult_groq(*, is_follow_up: bool = False) -> None:
         {
             "role": "assistant",
             "content": (
-                (
-                    f"**Aggiornamento dell'orientamento:** **{destination}**.\n\n"
-                    f"{result.analysis['motivazione']}"
-                )
-                if is_follow_up
-                else (
-                    "Grazie, ho raccolto le informazioni. In base a quanto riportato, "
-                    f"la struttura che potrebbe essere più appropriata è: **{destination}**.\n\n"
-                    "È un orientamento informativo, non una diagnosi né una prescrizione."
-                )
+                "Grazie, ho raccolto le informazioni. In base a quanto riportato, "
+                f"la struttura che potrebbe essere più appropriata è: **{destination}**.\n\n"
+                "È un orientamento informativo, non una diagnosi né una prescrizione."
             ),
         }
     )
-
-
-def llm_input() -> dict[str, Any]:
-    """Restituisce il contratto dati da inviare all'LLM nel prossimo step."""
-    return {
-        "dati_personali": st.session_state.profile,
-        "risposte_utente": st.session_state.answers,
-        "conversazione": st.session_state.messages,
-        "analisi_llm": st.session_state.analysis,
-    }
 
 
 def scroll_chat_to_bottom() -> None:
@@ -129,12 +111,19 @@ def scroll_chat_to_bottom() -> None:
         """
         <script>
           const scrollToLatestMessage = () => {
-            const content = document.querySelector('[data-testid="stMainBlockContainer"]');
-            if (content) {
-              content.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+            const scrollContainer = document.querySelector('[data-testid="stAppViewContainer"]');
+            if (scrollContainer) {
+              scrollContainer.scrollTo({
+                top: scrollContainer.scrollHeight,
+                behavior: 'smooth'
+              });
+            } else {
+              window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
             }
           };
-          window.setTimeout(scrollToLatestMessage, 100);
+          window.requestAnimationFrame(scrollToLatestMessage);
+          window.setTimeout(scrollToLatestMessage, 150);
+          window.setTimeout(scrollToLatestMessage, 400);
         </script>
         """,
         unsafe_allow_javascript=True,
@@ -190,7 +179,6 @@ def render_farmacie_results() -> None:
     """Mostra le cinque farmacie aperte più vicine alla posizione dell'utente."""
     st.subheader("Farmacie aperte vicine")
     st.caption("Le distanze sono calcolate in linea d'aria dalla posizione inserita.")
-    st.warning("Orari simulati per il prototipo: verifica sempre con la farmacia prima di recarti.")
     coordinates = user_coordinates()
     if not coordinates:
         st.warning(st.session_state.location_error)
@@ -211,7 +199,7 @@ def render_farmacie_results() -> None:
             st.write(pharmacy.full_address)
             st.write(f"**Distanza:** {pharmacy.distance_km:.1f} km")
             st.write("**Disponibilità:** Aperta ora (orario simulato)")
-            st.write(f"**Orario simulato:** {pharmacy.simulated_schedule}")
+            st.write(f"**Orario:** {pharmacy.simulated_schedule}")
             if pharmacy.typology:
                 st.caption(f"Tipologia: {pharmacy.typology}")
 
@@ -234,12 +222,9 @@ def render_pronto_soccorso_results() -> None:
         st.info("Non risultano Pronto Soccorso con coordinate disponibili.")
         return
 
-    newest_update = max(hospital.updated_at for hospital in candidates)
-    st.warning(
-        f"Dati di affluenza del file locale: ultimo aggiornamento disponibile {newest_update}. "
-        "Non rappresentano una situazione in tempo reale."
+    sort_by = st.selectbox(
+        "Ordina i 5 Pronto Soccorso selezionati per", list(SORT_OPTIONS), key="ps_sort"
     )
-    sort_by = st.selectbox("Ordina i 5 Pronto Soccorso selezionati per", list(SORT_OPTIONS))
     for hospital in sort_candidates(candidates, sort_by):
         with st.container(border=True):
             st.markdown(f"#### {hospital.name}")
@@ -353,7 +338,9 @@ def render_chat() -> None:
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.write(message["content"])
-    scroll_chat_to_bottom()
+
+    if not st.session_state.intake_complete:
+        scroll_chat_to_bottom()
 
     if st.session_state.last_error:
         st.error(st.session_state.last_error)
@@ -378,28 +365,11 @@ def render_chat() -> None:
     if st.session_state.analysis["destinazione_consigliata"] == "CASA_COMUNITA":
         render_continuita_assistenziale()
         render_case_comunita_results()
+    if st.session_state.analysis["destinazione_consigliata"] in {"FARMACIA", "CASA_COMUNITA"}:
+        with st.expander("Mostra Pronto Soccorso vicini e affluenza", expanded=False):
+            render_pronto_soccorso_results()
     if st.session_state.analysis["destinazione_consigliata"] == "PRONTO_SOCCORSO":
         render_pronto_soccorso_results()
-    payload = llm_input()
-    with st.expander("Anteprima tecnica dei dati raccolti"):
-        st.json(payload)
-    st.download_button(
-        "Scarica i dati raccolti (JSON)",
-        data=json.dumps(payload, ensure_ascii=False, indent=2),
-        file_name="raccolta_orientamento.json",
-        mime="application/json",
-    )
-
-    st.divider()
-    st.subheader("Hai bisogno di chiarimenti?")
-    st.caption("Puoi aggiungere un dettaglio o dire se l'orientamento non ti soddisfa.")
-    follow_up = st.chat_input("Scrivi un altro messaggio", key="follow_up_chat")
-    if follow_up and follow_up.strip():
-        add_user_answer(follow_up.strip())
-        consult_groq(is_follow_up=True)
-        st.rerun()
-
-
 def main() -> None:
     st.set_page_config(page_title="Orientamento sanitario", page_icon="🩺", layout="centered")
     if not st.session_state.get("started"):
