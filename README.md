@@ -34,3 +34,10 @@ esclude le sedi non indicate come aperte dal dataset.
 Il CSV ricevuto riporta l'apertura nei weekend/festivi ma non le fasce orarie
 giornaliere: nei feriali la disponibilità viene quindi indicata come “da
 verificare” e l'app offre il collegamento alla scheda ufficiale con gli orari.
+
+## Farmacie
+
+Quando Groq consiglia `FARMACIA`, l'app legge `data/farmaciereglaziolatlon.csv`,
+esclude le righe con validità terminata e mostra le cinque farmacie attive più
+vicine. Il file non contiene orari né turni: l'app non può quindi confermare
+un'apertura in questo istante e invita a verificarla prima di recarsi sul posto.

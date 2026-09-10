@@ -18,6 +18,7 @@ from case_comunita import (
     geocode_address,
     nearest_available_case_comunita,
 )
+from farmacie import nearest_active_farmacie
 from safety import emergency_analysis
 
 
@@ -55,7 +56,7 @@ def add_user_answer(answer: str) -> None:
     st.session_state.answers.append(answer)
 
 
-def consult_groq() -> None:
+def consult_groq(*, is_follow_up: bool = False) -> None:
     """Aggiunge alla chat la domanda o l'analisi restituite dal servizio Groq."""
     local_emergency = emergency_analysis(st.session_state.answers[-1])
     if local_emergency:
@@ -96,9 +97,16 @@ def consult_groq() -> None:
         {
             "role": "assistant",
             "content": (
-                "Grazie, ho raccolto le informazioni. In base a quanto riportato, "
-                f"la struttura che potrebbe essere più appropriata è: **{destination}**.\n\n"
-                "È un orientamento informativo, non una diagnosi né una prescrizione."
+                (
+                    f"**Aggiornamento dell'orientamento:** **{destination}**.\n\n"
+                    f"{result.analysis['motivazione']}"
+                )
+                if is_follow_up
+                else (
+                    "Grazie, ho raccolto le informazioni. In base a quanto riportato, "
+                    f"la struttura che potrebbe essere più appropriata è: **{destination}**.\n\n"
+                    "È un orientamento informativo, non una diagnosi né una prescrizione."
+                )
             ),
         }
     )
@@ -112,6 +120,24 @@ def llm_input() -> dict[str, Any]:
         "conversazione": st.session_state.messages,
         "analisi_llm": st.session_state.analysis,
     }
+
+
+def scroll_chat_to_bottom() -> None:
+    """Porta la viewport all'ultimo messaggio dopo ogni rerun della chat."""
+    st.html(
+        """
+        <script>
+          const scrollToLatestMessage = () => {
+            const content = document.querySelector('[data-testid="stMainBlockContainer"]');
+            if (content) {
+              content.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+            }
+          };
+          window.setTimeout(scrollToLatestMessage, 100);
+        </script>
+        """,
+        unsafe_allow_javascript=True,
+    )
 
 
 def user_coordinates() -> tuple[float, float] | None:
@@ -158,7 +184,41 @@ def render_case_comunita_results() -> None:
             if structure.official_url:
                 st.link_button("Consulta la scheda e gli orari ufficiali", structure.official_url)
 
-    st.info("Hai bisogno di assistenza medica? Per la continuità assistenziale nel Lazio chiama il 116117.")
+
+def render_farmacie_results() -> None:
+    """Mostra le cinque farmacie attive più vicine alla posizione dell'utente."""
+    st.subheader("Farmacie vicine")
+    st.caption("Le distanze sono calcolate in linea d'aria dalla posizione inserita.")
+    coordinates = user_coordinates()
+    if not coordinates:
+        st.warning(st.session_state.location_error)
+        return
+
+    try:
+        pharmacies = nearest_active_farmacie(*coordinates)
+    except FileNotFoundError as error:
+        st.warning(str(error))
+        return
+    if not pharmacies:
+        st.info("Non risultano farmacie attive con coordinate disponibili vicino alla posizione inserita.")
+        return
+
+    for pharmacy in pharmacies:
+        with st.container(border=True):
+            st.markdown(f"#### {pharmacy.name}")
+            st.write(pharmacy.full_address)
+            st.write(f"**Distanza:** {pharmacy.distance_km:.1f} km")
+            st.write(f"**Disponibilità:** {pharmacy.opening_notice}")
+            if pharmacy.typology:
+                st.caption(f"Tipologia: {pharmacy.typology}")
+
+
+
+def render_continuita_assistenziale() -> None:
+    st.info(
+        "**Hai bisogno di assistenza medica?** Per la continuità assistenziale nel Lazio "
+        "chiama il **116117**."
+    )
 
 
 def render_start_form() -> None:
@@ -197,9 +257,9 @@ def render_start_form() -> None:
         submitted = st.form_submit_button("Inizia", type="primary")
 
     if submitted:
-        fields = (street_name, civic_number, postal_code, comune, provincia)
+        fields = (street_name, postal_code, comune, provincia)
         if not all(field.strip() for field in fields):
-            st.error("Completa via/piazza, civico, CAP, comune e provincia.")
+            st.error("Completa via/piazza, CAP, comune e provincia.")
             return
         if not re.fullmatch(r"\d{5}", postal_code.strip()):
             st.error("Il CAP deve contenere esattamente 5 cifre.")
@@ -207,9 +267,12 @@ def render_start_form() -> None:
         if not re.fullmatch(r"[A-Za-z]{2}", provincia.strip()):
             st.error("La provincia deve essere composta da 2 lettere, ad esempio RM.")
             return
+        address_parts = [street_name.strip()]
+        if civic_number.strip():
+            address_parts.append(civic_number.strip())
         full_address = (
-            f"{street_name.strip()}, {civic_number.strip()}, {postal_code.strip()} "
-            f"{comune.strip()} ({provincia.strip().upper()}), Italia"
+            f"{', '.join(address_parts)}, {postal_code.strip()} {comune.strip()} "
+            f"({provincia.strip().upper()}), Italia"
         )
         initialize_conversation(
             {
@@ -239,6 +302,7 @@ def render_chat() -> None:
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.write(message["content"])
+    scroll_chat_to_bottom()
 
     if st.session_state.last_error:
         st.error(st.session_state.last_error)
@@ -255,12 +319,13 @@ def render_chat() -> None:
             st.rerun()
         return
 
-    st.success("Raccolta completata. I dati sono pronti per il passaggio all'LLM.")
-    st.subheader("Orientamento ricevuto")
-    st.write(st.session_state.analysis["motivazione"])
     if st.session_state.analysis["livello_urgenza"] == "POSSIBILE_EMERGENZA":
         st.error("Possibile emergenza: chiama il 112 immediatamente.")
+    if st.session_state.analysis["destinazione_consigliata"] == "FARMACIA":
+        render_continuita_assistenziale()
+        render_farmacie_results()
     if st.session_state.analysis["destinazione_consigliata"] == "CASA_COMUNITA":
+        render_continuita_assistenziale()
         render_case_comunita_results()
     payload = llm_input()
     with st.expander("Anteprima tecnica dei dati raccolti"):
@@ -271,6 +336,15 @@ def render_chat() -> None:
         file_name="raccolta_orientamento.json",
         mime="application/json",
     )
+
+    st.divider()
+    st.subheader("Hai bisogno di chiarimenti?")
+    st.caption("Puoi aggiungere un dettaglio o dire se l'orientamento non ti soddisfa.")
+    follow_up = st.chat_input("Scrivi un altro messaggio", key="follow_up_chat")
+    if follow_up and follow_up.strip():
+        add_user_answer(follow_up.strip())
+        consult_groq(is_follow_up=True)
+        st.rerun()
 
 
 def main() -> None:
