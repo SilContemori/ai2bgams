@@ -18,7 +18,8 @@ from case_comunita import (
     geocode_address,
     nearest_available_case_comunita,
 )
-from farmacie import nearest_active_farmacie
+from farmacie import nearest_open_farmacie
+from pronto_soccorso import SORT_OPTIONS, nearest_pronto_soccorso, sort_candidates
 from safety import emergency_analysis
 
 
@@ -186,21 +187,22 @@ def render_case_comunita_results() -> None:
 
 
 def render_farmacie_results() -> None:
-    """Mostra le cinque farmacie attive più vicine alla posizione dell'utente."""
-    st.subheader("Farmacie vicine")
+    """Mostra le cinque farmacie aperte più vicine alla posizione dell'utente."""
+    st.subheader("Farmacie aperte vicine")
     st.caption("Le distanze sono calcolate in linea d'aria dalla posizione inserita.")
+    st.warning("Orari simulati per il prototipo: verifica sempre con la farmacia prima di recarti.")
     coordinates = user_coordinates()
     if not coordinates:
         st.warning(st.session_state.location_error)
         return
 
     try:
-        pharmacies = nearest_active_farmacie(*coordinates)
+        pharmacies = nearest_open_farmacie(*coordinates)
     except FileNotFoundError as error:
         st.warning(str(error))
         return
     if not pharmacies:
-        st.info("Non risultano farmacie attive con coordinate disponibili vicino alla posizione inserita.")
+        st.info("Non risultano farmacie aperte secondo gli orari simulati del prototipo.")
         return
 
     for pharmacy in pharmacies:
@@ -208,9 +210,58 @@ def render_farmacie_results() -> None:
             st.markdown(f"#### {pharmacy.name}")
             st.write(pharmacy.full_address)
             st.write(f"**Distanza:** {pharmacy.distance_km:.1f} km")
-            st.write(f"**Disponibilità:** {pharmacy.opening_notice}")
+            st.write("**Disponibilità:** Aperta ora (orario simulato)")
+            st.write(f"**Orario simulato:** {pharmacy.simulated_schedule}")
             if pharmacy.typology:
                 st.caption(f"Tipologia: {pharmacy.typology}")
+
+
+def render_pronto_soccorso_results() -> None:
+    """Mostra i cinque PS vicini con dati di affluenza e ordinamento selezionabile."""
+    st.subheader("Pronto Soccorso vicini")
+    st.caption("I Pronto Soccorso sono operativi 24 ore su 24. Distanze in linea d'aria.")
+    coordinates = user_coordinates()
+    if not coordinates:
+        st.warning(st.session_state.location_error)
+        return
+
+    try:
+        candidates = nearest_pronto_soccorso(*coordinates)
+    except FileNotFoundError as error:
+        st.warning(str(error))
+        return
+    if not candidates:
+        st.info("Non risultano Pronto Soccorso con coordinate disponibili.")
+        return
+
+    newest_update = max(hospital.updated_at for hospital in candidates)
+    st.warning(
+        f"Dati di affluenza del file locale: ultimo aggiornamento disponibile {newest_update}. "
+        "Non rappresentano una situazione in tempo reale."
+    )
+    sort_by = st.selectbox("Ordina i 5 Pronto Soccorso selezionati per", list(SORT_OPTIONS))
+    for hospital in sort_candidates(candidates, sort_by):
+        with st.container(border=True):
+            st.markdown(f"#### {hospital.name}")
+            st.write(f"{hospital.address} · {hospital.comune} · {hospital.emergency_type}")
+            st.write(f"**Distanza:** {hospital.distance_km:.1f} km")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Totale persone presenti", hospital.total_present)
+            with col2:
+                st.metric("Totale in attesa", hospital.total_waiting)
+            st.caption("Capacità/posti disponibili: dato non presente nel dataset.")
+            st.markdown(
+                "**In attesa:** "
+                f"🔴 Rossi: {hospital.red_waiting} · 🟡 Gialli: {hospital.yellow_waiting} · "
+                f"🟢 Verdi: {hospital.green_waiting} · ⚪ Bianchi: {hospital.white_waiting} · "
+                f"❓ Non assegnati: {hospital.unassigned_waiting}"
+            )
+            st.write(
+                f"In trattamento: **{hospital.total_treatment}** · "
+                f"In osservazione breve: **{hospital.total_observation}**"
+            )
+            st.caption(f"Aggiornamento dati: {hospital.updated_at}")
 
 
 
@@ -327,6 +378,8 @@ def render_chat() -> None:
     if st.session_state.analysis["destinazione_consigliata"] == "CASA_COMUNITA":
         render_continuita_assistenziale()
         render_case_comunita_results()
+    if st.session_state.analysis["destinazione_consigliata"] == "PRONTO_SOCCORSO":
+        render_pronto_soccorso_results()
     payload = llm_input()
     with st.expander("Anteprima tecnica dei dati raccolti"):
         st.json(payload)

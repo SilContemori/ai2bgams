@@ -15,6 +15,7 @@ DATASET_PATH = Path(__file__).parent / "data" / "farmaciereglaziolatlon.csv"
 
 @dataclass(frozen=True)
 class Farmacia:
+    pharmacy_id: int
     name: str
     address: str
     cap: str
@@ -32,8 +33,27 @@ class Farmacia:
         return f"{self.address}, {cap} {self.comune} ({self.provincia})"
 
     @property
-    def opening_notice(self) -> str:
-        return "Orari e turni non presenti nel dataset: verifica prima di recarti"
+    def simulated_schedule(self) -> str:
+        """Orario fittizio stabile, usato solo finché non esiste una fonte ufficiale."""
+        if self.pharmacy_id % 17 == 0:
+            return "Aperta 24 ore su 24"
+        if self.pharmacy_id % 5 == 0:
+            return "Lun–Ven 08:00–20:00 · Sab e Dom chiusa"
+        if self.pharmacy_id % 3 == 0:
+            return "Lun–Sab 08:00–20:00 · Dom chiusa"
+        return "Tutti i giorni 08:00–20:00"
+
+    def is_open_now(self, now: datetime | None = None) -> bool:
+        current = now or datetime.now()
+        if self.pharmacy_id % 17 == 0:
+            return True
+        if not 8 <= current.hour < 20:
+            return False
+        if self.pharmacy_id % 5 == 0:
+            return current.weekday() < 5
+        if self.pharmacy_id % 3 == 0:
+            return current.weekday() < 6
+        return True
 
 
 def _parse_date(value: str | None) -> date | None:
@@ -68,6 +88,7 @@ def load_active_farmacie(path: Path = DATASET_PATH, today: date | None = None) -
                 longitude = float((row.get("LONGITUDINE") or "").replace(",", "."))
                 pharmacies.append(
                     Farmacia(
+                        pharmacy_id=int(row["CODICEIDENTIFICATIVOFARMACIA"]),
                         name=(row.get("DESCRIZIONEFARMACIA") or "").strip(),
                         address=(row.get("INDIRIZZO") or "").strip(),
                         cap=(row.get("CAP") or "").strip(),
@@ -92,5 +113,21 @@ def nearest_active_farmacie(latitude: float, longitude: float, limit: int = 5) -
             distance_km=haversine_km(latitude, longitude, pharmacy.latitude, pharmacy.longitude),
         )
         for pharmacy in load_active_farmacie()
+    ]
+    return sorted(ranked, key=lambda pharmacy: pharmacy.distance_km)[:limit]
+
+
+def nearest_open_farmacie(
+    latitude: float, longitude: float, now: datetime | None = None, limit: int = 5
+) -> list[Farmacia]:
+    """Restituisce le farmacie attive e aperte secondo l'orario simulato del prototipo."""
+    current = now or datetime.now()
+    ranked = [
+        replace(
+            pharmacy,
+            distance_km=haversine_km(latitude, longitude, pharmacy.latitude, pharmacy.longitude),
+        )
+        for pharmacy in load_active_farmacie(today=current.date())
+        if pharmacy.is_open_now(current)
     ]
     return sorted(ranked, key=lambda pharmacy: pharmacy.distance_km)[:limit]

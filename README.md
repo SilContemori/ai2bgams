@@ -38,6 +38,16 @@ verificare” e l'app offre il collegamento alla scheda ufficiale con gli orari.
 ## Farmacie
 
 Quando Groq consiglia `FARMACIA`, l'app legge `data/farmaciereglaziolatlon.csv`,
-esclude le righe con validità terminata e mostra le cinque farmacie attive più
-vicine. Il file non contiene orari né turni: l'app non può quindi confermare
-un'apertura in questo istante e invita a verificarla prima di recarsi sul posto.
+esclude le righe con validità terminata e mostra le cinque farmacie aperte più
+vicine. Il file non contiene orari né turni: per il prototipo gli orari sono
+simulati in modo deterministico (08:00–20:00, alcune chiuse nel weekend o la
+domenica, alcune H24) e sono sempre contrassegnati come simulati nell'interfaccia.
+
+## Pronto Soccorso
+
+Quando Groq consiglia `PRONTO_SOCCORSO`, l'app usa esclusivamente
+`data/Pronto_Soccorso_Lazio_Coordinate.csv`, seleziona i cinque PS più vicini e
+consente di ordinarli per distanza, attese totali o codice di triage. Per ogni
+struttura mostra persone presenti (`TUTTI`), attese, trattamento e osservazione.
+Il dataset non contiene la capacità o i posti disponibili, che vengono quindi
+esplicitamente indicati come non disponibili.
