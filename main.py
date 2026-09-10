@@ -7,11 +7,17 @@ passati successivamente al classificatore LLM.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import streamlit as st
 
 from groq_service import GroqService, GroqServiceError
+from case_comunita import (
+    LocationError,
+    geocode_address,
+    nearest_available_case_comunita,
+)
 from safety import emergency_analysis
 
 
@@ -25,7 +31,7 @@ def reset_conversation() -> None:
     """Rimuove i dati della conversazione dalla sola sessione corrente."""
     for key in (
         "started", "profile", "messages", "answers", "follow_up_count", "intake_complete",
-        "analysis", "last_error",
+        "analysis", "last_error", "user_coordinates", "location_error",
     ):
         st.session_state.pop(key, None)
 
@@ -39,6 +45,8 @@ def initialize_conversation(profile: dict[str, Any]) -> None:
     st.session_state.intake_complete = False
     st.session_state.analysis = None
     st.session_state.last_error = None
+    st.session_state.user_coordinates = None
+    st.session_state.location_error = None
 
 
 def add_user_answer(answer: str) -> None:
@@ -106,6 +114,53 @@ def llm_input() -> dict[str, Any]:
     }
 
 
+def user_coordinates() -> tuple[float, float] | None:
+    """Geocodifica l'indirizzo una sola volta durante la conversazione."""
+    if st.session_state.user_coordinates:
+        return st.session_state.user_coordinates
+    if st.session_state.location_error:
+        return None
+    try:
+        st.session_state.user_coordinates = geocode_address(st.session_state.profile["indirizzo"])
+    except LocationError as error:
+        st.session_state.location_error = str(error)
+        return None
+    return st.session_state.user_coordinates
+
+
+def render_case_comunita_results() -> None:
+    """Mostra le cinque Case della Comunità più vicine e disponibili."""
+    st.subheader("Case della Comunità vicine")
+    st.caption("Le distanze sono calcolate in linea d'aria dalla posizione inserita.")
+    coordinates = user_coordinates()
+    if not coordinates:
+        st.warning(st.session_state.location_error)
+        return
+
+    try:
+        structures = nearest_available_case_comunita(*coordinates)
+    except FileNotFoundError as error:
+        st.warning(str(error))
+        return
+    if not structures:
+        st.info("Non risultano Case della Comunità disponibili con i dati attuali.")
+        return
+
+    for structure in structures:
+        _, availability = structure.availability()
+        with st.container(border=True):
+            st.markdown(f"#### {structure.name}")
+            st.write(f"{structure.address}, {structure.comune} · {structure.asl}")
+            st.write(f"**Distanza:** {structure.distance_km:.1f} km")
+            st.write(f"**Disponibilità:** {availability}")
+            if structure.phone:
+                st.write(f"**Telefono:** {structure.phone}")
+            if structure.official_url:
+                st.link_button("Consulta la scheda e gli orari ufficiali", structure.official_url)
+
+    st.info("Hai bisogno di assistenza medica? Per la continuità assistenziale nel Lazio chiama il 116117.")
+
+
 def render_start_form() -> None:
     st.title("Orientamento ai servizi sanitari")
     st.caption("Un supporto informativo: non sostituisce un medico e non effettua diagnosi.")
@@ -121,7 +176,20 @@ def render_start_form() -> None:
         with col2:
             sex = st.selectbox("Sesso", ["Preferisco non indicarlo", "Femmina", "Maschio", "Altro"])
             height = st.number_input("Altezza (cm)", min_value=30.0, max_value=250.0, step=0.5)
-        address = st.text_input("Indirizzo o posizione", placeholder="Es. Via Ostiense 159, Roma")
+        st.markdown("##### Posizione")
+        st.caption("Servono dati completi per evitare vie omonime in comuni diversi.")
+        street, house_number = st.columns([3, 1])
+        with street:
+            street_name = st.text_input("Via o piazza", placeholder="Es. Via Ostiense")
+        with house_number:
+            civic_number = st.text_input("Civico", placeholder="159")
+        cap, municipality, province = st.columns([1, 2, 1])
+        with cap:
+            postal_code = st.text_input("CAP", placeholder="00154", max_chars=5)
+        with municipality:
+            comune = st.text_input("Comune", placeholder="Roma")
+        with province:
+            provincia = st.text_input("Provincia", value="RM", max_chars=2)
         additional_info = st.text_area(
             "Ulteriori informazioni utili (facoltativo)",
             placeholder="Es. allergie, gravidanza, patologie importanti o farmaci assunti",
@@ -129,13 +197,27 @@ def render_start_form() -> None:
         submitted = st.form_submit_button("Inizia", type="primary")
 
     if submitted:
-        if not address.strip():
-            st.error("Inserisci un indirizzo o una posizione per poter trovare le strutture vicine.")
+        fields = (street_name, civic_number, postal_code, comune, provincia)
+        if not all(field.strip() for field in fields):
+            st.error("Completa via/piazza, civico, CAP, comune e provincia.")
             return
+        if not re.fullmatch(r"\d{5}", postal_code.strip()):
+            st.error("Il CAP deve contenere esattamente 5 cifre.")
+            return
+        if not re.fullmatch(r"[A-Za-z]{2}", provincia.strip()):
+            st.error("La provincia deve essere composta da 2 lettere, ad esempio RM.")
+            return
+        full_address = (
+            f"{street_name.strip()}, {civic_number.strip()}, {postal_code.strip()} "
+            f"{comune.strip()} ({provincia.strip().upper()}), Italia"
+        )
         initialize_conversation(
             {
                 "eta": int(age), "sesso": sex, "peso_kg": weight,
-                "altezza_cm": height, "indirizzo": address.strip(),
+                "altezza_cm": height, "via_piazza": street_name.strip(),
+                "civico": civic_number.strip(), "cap": postal_code.strip(),
+                "comune": comune.strip(), "provincia": provincia.strip().upper(),
+                "indirizzo": full_address,
                 "informazioni_aggiuntive": additional_info.strip(),
             }
         )
@@ -178,6 +260,8 @@ def render_chat() -> None:
     st.write(st.session_state.analysis["motivazione"])
     if st.session_state.analysis["livello_urgenza"] == "POSSIBILE_EMERGENZA":
         st.error("Possibile emergenza: chiama il 112 immediatamente.")
+    if st.session_state.analysis["destinazione_consigliata"] == "CASA_COMUNITA":
+        render_case_comunita_results()
     payload = llm_input()
     with st.expander("Anteprima tecnica dei dati raccolti"):
         st.json(payload)

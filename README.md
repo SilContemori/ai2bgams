@@ -19,7 +19,18 @@ Il modello predefinito è `openai/gpt-oss-20b`; può essere cambiato tramite
 
 ## Flusso attuale
 
-1. L'utente inserisce dati essenziali e posizione.
+1. L'utente inserisce dati essenziali e posizione completa (via, civico, CAP, comune e provincia).
 2. Descrive il problema nella chat.
 3. Groq può chiedere fino a tre chiarimenti, uno alla volta.
 4. Groq restituisce JSON validato con l'orientamento consigliato.
+
+## Case della Comunità
+
+Quando Groq consiglia `CASA_COMUNITA`, l'app legge
+`data/Case_della_Comunita_Lazio.csv`, geocodifica l'indirizzo dell'utente e mostra
+al massimo cinque strutture ordinate per distanza. Nel weekend e nei festivi
+esclude le sedi non indicate come aperte dal dataset.
+
+Il CSV ricevuto riporta l'apertura nei weekend/festivi ma non le fasce orarie
+giornaliere: nei feriali la disponibilità viene quindi indicata come “da
+verificare” e l'app offre il collegamento alla scheda ufficiale con gli orari.
